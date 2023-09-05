@@ -76,29 +76,32 @@ impl Display for Expr {
 
 type TypeContext = HashMap<String, Type>;
 
-fn replace_type(type_: Type, from: String, to: Type) -> Type {
+fn replace_type(type_: &Type, from: String, to: Type) -> Type {
     use Type::*;
 
     match type_ {
         Closure { param, body } => {
-            let param = replace_type(*param, from, to);
-            let body = replace_type(*body, from, to);
+            let param = replace_type(param, from.clone(), to.clone());
+            let body = replace_type(body, from, to);
 
             Type::Closure {
                 param: Box::new(param),
                 body: Box::new(body),
             }
         }
-        Forall { param, body } => match param == from {
-            true => Forall { param, body },
+        Forall { param, body } => match param == &from {
+            true => Forall {
+                param: param.clone(),
+                body: body.clone(),
+            },
             false => Forall {
-                param,
-                body: Box::new(replace_type(*body, from, to)),
+                param: param.clone(),
+                body: Box::new(replace_type(&*body, from, to)),
             },
         },
-        Var(var) => match var == from {
+        Var(var) => match var == &from {
             true => to,
-            false => type_,
+            false => type_.clone(),
         },
         Int => Int,
     }
@@ -142,13 +145,10 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
                 body: Box::new(body),
             }
         }
-        Expr::TypeApp { arg, abs } => {
-            match infer(*abs, context) {
-                Type::Forall { param, body } => replace_type(*body, param, arg),
-                type_ => panic!("cannot apply type {} to {}", abs, type_.name()),
-            }
-            // 1.
-        }
+        Expr::TypeApp { arg, abs } => match infer(*abs.clone(), context) {
+            Type::Forall { param, body } => replace_type(&*body, param, arg),
+            type_ => panic!("cannot apply type {} to {}", abs, type_.name()),
+        },
         Expr::Int(_int) => Type::Int,
     }
 }
@@ -157,6 +157,10 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
 enum Value {
     Closure {
         param: String,
+        body: Expr,
+        context: ValueContext,
+    },
+    Forall {
         body: Expr,
         context: ValueContext,
     },
@@ -198,40 +202,23 @@ fn eval(expr: Expr, context: ValueContext) -> Value {
                 Value::Native(native) => *(native(Box::new(arg))),
                 Value::Int(_value) => panic!(),
                 Value::String(_value) => panic!(),
+                Value::Forall {
+                    body: _,
+                    context: _,
+                } => panic!(),
             }
         }
+        // the forall value is evaluated later. this is just no-op
+        Expr::TypeAbs { param: _, body } => Value::Forall {
+            body: *body,
+            context,
+        },
+        Expr::TypeApp { arg: _, abs } => match eval(*abs, context) {
+            Value::Forall { body, context } => eval(body, context),
+            _ => panic!("invalid type application"),
+        },
         Expr::Int(int) => Value::Int(int),
-        Expr::String(string) => Value::String(string),
     }
 }
 
-fn main() {
-    let type_context = TypeContext::new();
-
-    let t_print = Type::Closure {
-        param: Box::new(Type::Int),
-        body: Box::new(Type::Int),
-    };
-
-    let type_context = type_context.update(String::from("print"), t_print);
-
-    let v_print = Value::Native(|value: Box<Value>| {
-        match *value.clone() {
-            Value::Int(value) => println!("{}", value),
-            _ => panic!(),
-        };
-
-        value
-    });
-
-    let value_context = ValueContext::new().update(String::from("print"), v_print);
-
-    let ast = Expr::App {
-        abs: Box::new(Expr::Var(String::from("print"))),
-        arg: Box::new(Expr::String("Hello, World!".to_owned())),
-    };
-
-    let _result_type = infer(ast.clone(), type_context);
-
-    let _result_value = eval(ast, value_context);
-}
+fn main() {}
