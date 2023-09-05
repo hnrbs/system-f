@@ -5,6 +5,7 @@ use im::hashmap::HashMap;
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
     Closure { param: Box<Type>, body: Box<Type> },
+    Forall { param: String, body: Box<Type> },
     Int,
     String,
 }
@@ -17,7 +18,13 @@ impl Type {
                 let body = (*body).name();
 
                 format!("closure<{} -> {}>", param, body)
-            }
+            },
+            Type::Forall { param, body } => {
+                let param = (*param).name();
+                let body = (*body).name();
+
+                format!("closure<{} -> {}>", param, body)
+            },
             Type::Int => String::from("int"),
             Type::String => String::from("string"),
         }
@@ -27,12 +34,19 @@ impl Type {
 #[derive(Debug, Clone)]
 enum Expr {
     Int(i64),
-    String(String),
     Var(String),
     Abs {
         param: String,
         param_type: Type,
         body: Box<Expr>,
+    },
+    TypeAbs {
+        param: String,
+        body: Box<Expr>,
+    },
+    TypeApp {
+        arg: Type,
+        abs: Box<Expr>,
     },
     App {
         arg: Box<Expr>,
@@ -42,10 +56,10 @@ enum Expr {
 
 type TypeContext = HashMap<String, Type>;
 
+fn replace_type(expr: Expr, param: String, by: Type)
+
 fn infer(expr: Expr, context: TypeContext) -> Type {
     match expr {
-        Expr::Int(_int) => Type::Int,
-        Expr::String(_str) => Type::String,
         Expr::Var(var) => context
             .get(&var)
             .expect(&format! {"type error: unbound variable {var}"})
@@ -74,6 +88,7 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
                 typ => panic!("type {} cannot be used as a closure", typ.name()),
             }
         }
+        Expr::Int(_int) => Type::Int,
     }
 }
 
