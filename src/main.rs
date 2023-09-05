@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{format, Display};
 
 use im::hashmap::HashMap;
 
@@ -6,8 +6,8 @@ use im::hashmap::HashMap;
 enum Type {
     Closure { param: Box<Type>, body: Box<Type> },
     Forall { param: String, body: Box<Type> },
+    Var(String),
     Int,
-    String,
 }
 
 impl Type {
@@ -18,15 +18,14 @@ impl Type {
                 let body = (*body).name();
 
                 format!("closure<{} -> {}>", param, body)
-            },
+            }
             Type::Forall { param, body } => {
-                let param = (*param).name();
                 let body = (*body).name();
 
                 format!("closure<{} -> {}>", param, body)
-            },
+            }
+            Type::Var(string) => string.clone(),
             Type::Int => String::from("int"),
-            Type::String => String::from("string"),
         }
     }
 }
@@ -54,9 +53,56 @@ enum Expr {
     },
 }
 
+impl Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Expr::*;
+
+        let expr = match self {
+            Int(int) => int.to_string(),
+            Var(name) => name.clone(),
+            Abs {
+                param,
+                param_type,
+                body,
+            } => format!("({}:{}.{})", param, param_type.name(), body),
+            TypeAbs { param, body } => format!("(Λ{}.{})", param, body),
+            TypeApp { arg, abs } => format!("(∀{}.{}", arg.name(), abs),
+            App { arg, abs } => format!("{} {}", arg, abs),
+        };
+
+        write!(f, "{}", expr)
+    }
+}
+
 type TypeContext = HashMap<String, Type>;
 
-fn replace_type(expr: Expr, param: String, by: Type)
+fn replace_type(type_: Type, from: String, to: Type) -> Type {
+    use Type::*;
+
+    match type_ {
+        Closure { param, body } => {
+            let param = replace_type(*param, from, to);
+            let body = replace_type(*body, from, to);
+
+            Type::Closure {
+                param: Box::new(param),
+                body: Box::new(body),
+            }
+        }
+        Forall { param, body } => match param == from {
+            true => Forall { param, body },
+            false => Forall {
+                param,
+                body: Box::new(replace_type(*body, from, to)),
+            },
+        },
+        Var(var) => match var == from {
+            true => to,
+            false => type_,
+        },
+        Int => Int,
+    }
+}
 
 fn infer(expr: Expr, context: TypeContext) -> Type {
     match expr {
@@ -87,6 +133,21 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
                 },
                 typ => panic!("type {} cannot be used as a closure", typ.name()),
             }
+        }
+        Expr::TypeAbs { param, body } => {
+            let body = infer(*body, context);
+
+            Type::Forall {
+                param,
+                body: Box::new(body),
+            }
+        }
+        Expr::TypeApp { arg, abs } => {
+            match infer(*abs, context) {
+                Type::Forall { param, body } => replace_type(*body, param, arg),
+                type_ => panic!("cannot apply type {} to {}", abs, type_.name()),
+            }
+            // 1.
         }
         Expr::Int(_int) => Type::Int,
     }
