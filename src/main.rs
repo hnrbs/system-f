@@ -8,29 +8,26 @@ enum Type {
     Forall { param: String, body: Box<Type> },
     Var(String),
     Int,
+    Str,
 }
 
-impl Type {
-    fn name(&self) -> String {
-        match self {
-            Type::Closure { param, body } => {
-                let param = (*param).name();
-                let body = (*body).name();
+impl Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Type::*;
 
-                format!("closure<{} -> {}>", param, body)
-            }
-            Type::Forall { param, body } => {
-                let body = (*body).name();
+        let type_ = match self {
+            Closure { param, body } => format!("{} -> {}", param, body),
+            Forall { param, body } => format!("{} -> {}", param, body),
+            Var(var) => format!("Var({})", var),
+            Int => String::from("Int"),
+            Str => String::from("Str"),
+        };
 
-                format!("closure<{} -> {}>", param, body)
-            }
-            Type::Var(string) => string.clone(),
-            Type::Int => String::from("int"),
-        }
+        f.write_str(&type_)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Expr {
     Int(i64),
     Var(String),
@@ -64,10 +61,10 @@ impl Display for Expr {
                 param,
                 param_type,
                 body,
-            } => format!("({}:{}.{})", param, param_type.name(), body),
+            } => format!("(λ{}:{}.{})", param, param_type, body),
             TypeAbs { param, body } => format!("(Λ{}.{})", param, body),
-            TypeApp { arg, abs } => format!("(∀{}.{}", arg.name(), abs),
-            App { arg, abs } => format!("{} {}", arg, abs),
+            TypeApp { arg, abs } => format!("({} {})", abs, arg),
+            App { arg, abs } => format!("({} {})", abs, arg),
         };
 
         write!(f, "{}", expr)
@@ -104,6 +101,7 @@ fn replace_type(type_: &Type, from: String, to: Type) -> Type {
             false => type_.clone(),
         },
         Int => Int,
+        Str => Str,
     }
 }
 
@@ -132,9 +130,9 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
             match infer(*abs, context) {
                 Type::Closure { param, body } => match *param == arg {
                     true => *body,
-                    false => panic!("expecting type {}. {} given", (*param).name(), arg.name()),
+                    false => panic!("expecting type {}. {} given", (*param), arg),
                 },
-                typ => panic!("type {} cannot be used as a closure", typ.name()),
+                typ => panic!("type {} cannot be used as a closure", typ),
             }
         }
         Expr::TypeAbs { param, body } => {
@@ -147,13 +145,13 @@ fn infer(expr: Expr, context: TypeContext) -> Type {
         }
         Expr::TypeApp { arg, abs } => match infer(*abs.clone(), context) {
             Type::Forall { param, body } => replace_type(&*body, param, arg),
-            type_ => panic!("cannot apply type {} to {}", abs, type_.name()),
+            type_ => panic!("cannot apply type {} to {}", abs, type_),
         },
         Expr::Int(_int) => Type::Int,
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Value {
     Closure {
         param: String,
@@ -165,8 +163,26 @@ enum Value {
         context: ValueContext,
     },
     Int(i64),
-    String(String),
     Native(fn(Box<Value>) -> Box<Value>),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Value::*;
+
+        let value = match self {
+            Closure {
+                param,
+                body,
+                context: _,
+            } => format!("(Closure {} -> {} )", param, body),
+            Forall { body, context: _ } => format!("(Forall {})", body),
+            Int(int) => int.to_string(),
+            Native(_) => "(Native)".to_string(),
+        };
+
+        f.write_str(&value)
+    }
 }
 
 type ValueContext = HashMap<String, Value>;
@@ -201,7 +217,6 @@ fn eval(expr: Expr, context: ValueContext) -> Value {
                 }
                 Value::Native(native) => *(native(Box::new(arg))),
                 Value::Int(_value) => panic!(),
-                Value::String(_value) => panic!(),
                 Value::Forall {
                     body: _,
                     context: _,
@@ -221,4 +236,139 @@ fn eval(expr: Expr, context: ValueContext) -> Value {
     }
 }
 
-fn main() {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_infers_identity_function() {
+        let ast = Expr::Abs {
+            param: String::from("x"),
+            param_type: Type::Int,
+            body: Box::new(Expr::Var(String::from("x"))),
+        };
+
+        let infered_type = infer(ast.clone(), TypeContext::new());
+        let expected_type = Type::Closure {
+            param: Box::new(Type::Int),
+            body: Box::new(Type::Int),
+        };
+
+        assert_eq!(infered_type, expected_type);
+
+        let ast = Expr::App {
+            arg: Box::new(Expr::Int(4)),
+            abs: Box::new(ast),
+        };
+        let infered_type = infer(ast, TypeContext::new());
+        let expected_type = Type::Int;
+
+        assert_eq!(infered_type, expected_type);
+    }
+
+    #[test]
+    fn it_evals_identity_function() {
+        let ast = Expr::Abs {
+            param: String::from("x"),
+            param_type: Type::Str,
+            body: Box::new(Expr::Var(String::from("x"))),
+        };
+
+        let evaluated_value = eval(ast.clone(), ValueContext::new());
+        let expected_value = Value::Closure {
+            param: String::from("x"),
+            body: Expr::Var(String::from("x")),
+            context: ValueContext::new(),
+        };
+
+        assert_eq!(evaluated_value, expected_value);
+
+        let ast = Expr::App {
+            arg: Box::new(Expr::Int(4)),
+            abs: Box::new(ast),
+        };
+
+        let evaluated_value = eval(ast, ValueContext::new());
+        let expected_value = Value::Int(4);
+
+        assert_eq!(evaluated_value, expected_value);
+    }
+
+    #[test]
+    fn it_infers_polymorphic_identity_function() {
+        let ast = Expr::TypeAbs {
+            param: String::from("a"),
+            body: Box::new(Expr::Abs {
+                param: String::from("x"),
+                param_type: Type::Var(String::from("a")),
+                body: Box::new(Expr::Var(String::from("x"))),
+            }),
+        };
+
+        let infered_type = infer(ast.clone(), TypeContext::new());
+        let expected_type = Type::Forall {
+            param: String::from("a"),
+            body: Box::new(Type::Closure {
+                param: Box::new(Type::Var(String::from("a"))),
+                body: Box::new(Type::Var(String::from("a"))),
+            }),
+        };
+
+        assert_eq!(infered_type, expected_type);
+
+        let ast = Expr::TypeApp {
+            arg: Type::Int,
+            abs: Box::new(ast),
+        };
+
+        let infered_type = infer(ast, TypeContext::new());
+        let expected_type = Type::Closure {
+            param: Box::new(Type::Int),
+            body: Box::new(Type::Int),
+        };
+
+        assert_eq!(infered_type, expected_type);
+    }
+
+    #[test]
+    fn it_evaluates_polymorphic_identity_function() {
+        let ast = Expr::TypeAbs {
+            param: String::from("a"),
+            body: Box::new(Expr::Abs {
+                param: String::from("x"),
+                param_type: Type::Var(String::from("a")),
+                body: Box::new(Expr::Var(String::from("x"))),
+            }),
+        };
+
+        let evaluated_value = eval(ast.clone(), ValueContext::new());
+        let expected_value = Value::Forall {
+            body: Expr::Abs {
+                param: String::from("x"),
+                param_type: Type::Var(String::from("a")),
+                body: Box::new(Expr::Var(String::from("x"))),
+            },
+            context: ValueContext::new(),
+        };
+
+        assert_eq!(evaluated_value, expected_value);
+
+        let ast = Expr::TypeApp {
+            arg: Type::Int,
+            abs: Box::new(ast),
+        };
+
+        let evaluated_value = eval(ast, ValueContext::new());
+        let expected_value = Value::Closure {
+            param: String::from("x"),
+            body: Expr::Var(String::from("x")),
+            context: ValueContext::new(),
+        };
+
+        assert_eq!(evaluated_value, expected_value);
+    }
+}
+
+fn main() {
+    println!("run `cargo test` to see if it works");
+}
